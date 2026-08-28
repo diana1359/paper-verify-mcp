@@ -18,6 +18,36 @@ from fastmcp import FastMCP
 
 import sources as S
 
+# ---------------------------------------------------------------------------
+# 인증(OAuth) 설정
+# ---------------------------------------------------------------------------
+# Claude 웹/앱의 커스텀 커넥터는 연결 시 OAuth Dynamic Client Registration(DCR) 을
+# 시도한다. 서버에 OAuth 가 없으면 "Couldn't register with sign-in service" 로 실패한다.
+# 그래서 PUBLIC_URL 이 설정돼 있으면, 공개 도구용으로 "자동 승인" OAuth 를 켠다.
+#   - /register (DCR), /authorize(자동승인), /token 을 서버가 직접 처리 → Claude 연결 성공
+#   - 실제 로그인/신원확인은 하지 않음 (공개 데이터만 읽는 도구이므로)
+#
+# ⚠️ 이 방식은 등록 정보를 "메모리"에 저장하므로 반드시 상시 실행형 단일 프로세스
+#    (Render / Railway / Fly 등) 에서 돌려야 한다. Vercel 같은 서버리스에서는
+#    요청마다 인스턴스가 초기화돼 OAuth 흐름이 깨진다.
+#
+# PUBLIC_URL 이 없으면(로컬 개발 등) 인증 없이(authless) 동작한다.
+# Render 는 RENDER_EXTERNAL_URL 을 자동 주입하므로, URL을 미리 몰라도 자동 설정된다.
+PUBLIC_URL = (
+    os.environ.get("PUBLIC_URL")
+    or os.environ.get("RENDER_EXTERNAL_URL", "")
+).rstrip("/")
+
+auth = None
+if PUBLIC_URL:
+    from fastmcp.server.auth.providers.in_memory import InMemoryOAuthProvider
+    from mcp.server.auth.settings import ClientRegistrationOptions
+
+    auth = InMemoryOAuthProvider(
+        base_url=PUBLIC_URL,
+        client_registration_options=ClientRegistrationOptions(enabled=True),
+    )
+
 mcp = FastMCP(
     name="paper-verifier",
     instructions=(
@@ -25,6 +55,7 @@ mcp = FastMCP(
         "PubMed, Crossref, and OpenAlex. Use this to catch fabricated or "
         "hallucinated citations before trusting them."
     ),
+    auth=auth,
 )
 
 
@@ -151,7 +182,17 @@ async def check_citation(citation: str) -> dict[str, Any]:
 
 
 if __name__ == "__main__":
+    import uvicorn
+
     port = int(os.environ.get("PORT", "8000"))
     host = os.environ.get("HOST", "0.0.0.0")
-    # transport="http" -> Streamable HTTP. 엔드포인트: /mcp/
-    mcp.run(transport="http", host=host, port=port)
+
+    # Streamable HTTP ASGI 앱. 엔드포인트: /mcp
+    # allowed_hosts=["*"] 로 배포 도메인(onrender.com 등)의 Host 검증을 통과시킨다.
+    app = mcp.http_app(
+        path="/mcp",
+        stateless_http=True,
+        allowed_hosts=["*"],
+        allowed_origins=["*"],
+    )
+    uvicorn.run(app, host=host, port=port)

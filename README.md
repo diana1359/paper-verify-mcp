@@ -44,6 +44,20 @@ fastmcp dev server.py       # 브라우저에서 툴 실행/스키마 확인
 
 ## 2. 공개 서버로 배포하기
 
+> ⚠️ **중요 — Claude 웹/앱 커넥터로 연결하려면 상시 실행형 호스트를 쓰세요 (Vercel ✗ / Render ✓).**
+>
+> Claude의 커스텀 커넥터는 "연결(Connect)" 시 **OAuth 자동 등록(DCR)** 을 반드시 시도합니다.
+> 서버에 OAuth 가 전혀 없으면 *"Couldn't register with … sign-in service"* 오류로 연결이 실패합니다
+> (인증 없는 서버라도 마찬가지 — Claude의 알려진 동작).
+>
+> 그래서 이 서버는 **`PUBLIC_URL`(또는 Render 의 자동 변수)이 설정되면, 로그인 없이 자동 승인되는
+> 공개용 OAuth 를 스스로 켜서** 이 문제를 해결합니다. 단, 이 OAuth 는 등록정보를 **메모리**에 담으므로
+> **단일 상시 프로세스**(Render / Railway / Fly)에서만 동작합니다.
+> **Vercel 서버리스는 요청마다 인스턴스가 초기화돼 OAuth 흐름이 깨지므로, 커넥터 연결 용도로는 쓰지 마세요.**
+> (Vercel 배포 자체는 되지만, Claude UI 에서 "연결" 버튼이 실패합니다.)
+>
+> → **결론: 커넥터로 쓰려면 아래 "옵션 B) Render" 를 따르세요.**
+
 > ❓ **"GitHub에 sources.py만 올리면 되나요?"** → 아니요.
 > `sources.py` 는 `server.py` 가 불러 쓰는 모듈일 뿐입니다. 아래 파일 전체를 올려야 합니다:
 > ```
@@ -58,7 +72,11 @@ fastmcp dev server.py       # 브라우저에서 툴 실행/스키마 확인
 > ```
 > (`Dockerfile`, `render.yaml` 은 Render/Railway/Fly 용이라 Vercel만 쓸 거면 없어도 되지만, 있어도 무방합니다.)
 
-### 옵션 A) Vercel + GitHub  ★ 추천 경로
+### 옵션 A) Vercel + GitHub  (⚠️ authless 전용 — Claude 커넥터 연결은 실패)
+
+> Vercel 은 서버리스라 위에서 설명한 OAuth 를 유지하지 못합니다. 서버는 뜨지만 Claude "연결" 버튼에서
+> *"Couldn't register with sign-in service"* 로 실패합니다. **커넥터로 쓸 거면 옵션 B(Render) 로 가세요.**
+> (Vercel 은 다른 MCP 클라이언트나 authless 테스트 용도로만 참고.)
 
 Vercel은 **서버리스**라 이 저장소는 그에 맞게 이미 구성돼 있습니다
 (`api/index.py` 진입점 + stateless 모드 + lifespan 자동 초기화 + 단일 JSON 응답).
@@ -101,30 +119,35 @@ https://<프로젝트>.vercel.app/mcp
 
 ---
 
-### (대안) 상시 실행형 호스팅 — Render / Railway / Fly
+### 옵션 B) Render  ★ 커넥터로 쓰려면 이 경로 (무료 티어)
 
-콜드 스타트 없이 상시 켜두고 싶으면 아래도 됩니다. 셋 다 Dockerfile 을 그대로 인식합니다.
+상시 실행형 단일 프로세스라, 위에서 설명한 자동 OAuth 가 제대로 동작합니다.
 
-### 옵션 B) Render (무료 티어)
 1. 이 폴더를 GitHub 저장소로 push.
 2. [render.com](https://render.com) → **New → Web Service** → 저장소 선택.
-3. Runtime 이 **Docker** 로 잡히는지 확인 (`render.yaml` 이 자동 인식됨).
+3. Runtime 이 **Docker** 로 잡히는지 확인 (`render.yaml` 자동 인식).
 4. Environment 에 `CONTACT_EMAIL`(권장), `NCBI_API_KEY`(선택) 입력 → **Create**.
-5. 배포 완료 후 발급되는 주소 뒤에 `/mcp` 를 붙인 게 커넥터 URL 입니다:
-   `https://paper-verify-mcp.onrender.com/mcp`
+   - **`PUBLIC_URL` 은 설정할 필요 없음** — Render 가 `RENDER_EXTERNAL_URL` 을 자동 주입하고,
+     서버가 그걸 감지해 OAuth 를 자동으로 켭니다.
+5. 배포 완료 후 발급되는 주소 뒤에 `/mcp` 를 붙인 게 커넥터 URL:
+   `https://<서비스이름>.onrender.com/mcp`
 
-> 무료 티어는 유휴 시 슬립됩니다. 첫 호출이 몇 초 느릴 수 있어요(콜드 스타트).
+> 무료 티어는 유휴 시 슬립 → 첫 호출이 몇 초 느릴 수 있고(콜드 스타트),
+> **서버가 재시작되면 기존 OAuth 등록이 초기화**되어 Claude 에서 한 번 재연결이 필요할 수 있습니다
+> (공개 도구라 재연결도 로그인 없이 자동 승인되어 클릭 한 번이면 됩니다).
 
 ### 옵션 C) Railway
 1. [railway.app](https://railway.app) → **New Project → Deploy from GitHub repo**.
 2. Dockerfile 자동 인식 → Variables 에 `CONTACT_EMAIL` 등 추가.
 3. **Settings → Networking → Generate Domain** 으로 공개 도메인 발급.
-4. 커넥터 URL: `https://<도메인>/mcp`
+4. **Variables 에 `PUBLIC_URL=https://<발급된도메인>` 을 추가**(Railway 는 자동 주입이 없으므로 수동 설정) → 재배포.
+5. 커넥터 URL: `https://<도메인>/mcp`
 
 ### 옵션 D) Fly.io (CLI)
 ```bash
-fly launch --no-deploy          # fly.toml 생성 (내부 포트 8000 확인)
+fly launch --no-deploy                                   # fly.toml 생성 (내부 포트 8000 확인)
 fly secrets set CONTACT_EMAIL=you@example.com
+fly secrets set PUBLIC_URL=https://<앱이름>.fly.dev       # OAuth용 (수동 설정)
 fly deploy
 ```
 커넥터 URL: `https://<앱이름>.fly.dev/mcp`
@@ -146,8 +169,11 @@ curl -sL -X POST https://<당신-도메인>/mcp \
 1. Claude → **Settings(설정) → Connectors(커넥터)**.
 2. Connectors 옆 **`+`** → **Add custom connector**.
 3. 이름(예: `Paper Verifier`)과 URL(`https://<도메인>/mcp`) 입력.
-4. 이 서버는 공개 데이터만 읽으므로 **Advanced/OAuth 는 비워둠**.
-5. **Add** → 대화창 `+` 메뉴의 Connectors 에서 켜서 사용.
+4. **Advanced/OAuth 클라이언트 ID·시크릿 칸은 비워둡니다** — 서버가 자동 등록(DCR)을 처리합니다.
+5. **Add** → 커넥터 옆 **Connect** 클릭 → (로그인 화면 없이 자동 승인되어) 연결됨 → 대화창 `+` 메뉴에서 켜서 사용.
+
+> "연결"이 여전히 실패한다면: (a) Render 등 **상시 실행형 호스트**인지, (b) `/mcp` 로 요청 시 **401**이 오는지
+> (= OAuth 가 켜졌다는 뜻) 확인하세요. 200 이 오면 authless 상태라 `PUBLIC_URL` 이 설정 안 된 것입니다.
 
 **Team / Enterprise 플랜**
 - 개인은 추가 불가. **Owner/Primary Owner** 가 **Organization settings → Connectors → Add → Custom → Web** 에서 URL 등록 후, 구성원이 각자 **Connect**.
